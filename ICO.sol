@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT;
+// SPDX-License-Identifier: UNLICENSED
 
 pragma solidity >=0.8.0;
 
@@ -8,6 +8,8 @@ import '@openzeppelin/contracts/utils/math/SafeMath.sol';
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import '@openzeppelin/contracts/access/Ownable.sol';
 import '@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol';
+
+import './Vesting.sol';
 
 contract ICO is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -20,18 +22,19 @@ contract ICO is Ownable, ReentrancyGuard {
         uint256 tokensLeft;
     }
 
-    uint256 public oneIterationTokenAmount = 10 * 10 ** 6 * 10 ** 10;
+    uint256 public oneIterationTokenAmount = 10 * 10 ** 6 * 10 ** 18;
 
     bool public icoCompleted;
     uint256 public icoStartTime;
     uint256 public icoEndTime;
     address public tokenAddress;
+    address public vestingAddress;
     uint256 public currentIterationOfICO;
     uint256 public current_allocatedTokens;
-    uint256 public minLimit = 1 * 10 ** 10;
-    uint256 public maxLimit = 1 * 10 ** 8 * 10 ** 10;
+    uint256 public minLimit = 1 * 10 ** 18;
+    uint256 public maxLimit = 1 * 10 ** 8 * 10 ** 18;
     uint256 private referralBonus = 20;
-    uint256 private commission = 8 * 10 ** 15;
+    uint256 private commission = 8 * 10 ** 17;
     uint256 private maxRoundICO = 200;
 
     AggregatorV3Interface private priceFeed;
@@ -63,7 +66,17 @@ contract ICO is Ownable, ReentrancyGuard {
         tokenAddress = _tokenAddress;
         transferOwnership(owner);
         allowedInvestors[owner] = true;
-        priceFeed = AggregatorV3Interface(0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419);
+        
+        vestingAddress = address(new Vesting(tokenAddress, address(this)));
+        
+        //polygon
+        if (getChainId() == 137) {
+            priceFeed = AggregatorV3Interface(0xAB594600376Ec9fD91F8e885dADF0CE036862dE0);
+        }
+        //mumbai
+        if (getChainId() == 80001) {
+            priceFeed = AggregatorV3Interface(0xd0D5e3DB44DE05E9F294BB0a3bEEaF030DE24Ada);
+        }
     }
 
     /// can be accessed only by owner
@@ -71,6 +84,11 @@ contract ICO is Ownable, ReentrancyGuard {
         require(icoStartTime == 0, "ICO was started before");
         _allocate();
         icoStartTime = block.timestamp;
+        currentIterationOfICO = 17;
+        current_allocatedTokens = 710663 * 10 ** 18;
+        usdPrice = 26;
+        stepPriceInUSD = 1;
+        oneIterationTokenAmount = 19 * 10 ** 5 * 10 ** 18;
     }
 
     /// can be accessed only by owner
@@ -91,7 +109,7 @@ contract ICO is Ownable, ReentrancyGuard {
         referralBonus = _bonus;
     }
 
-    /// can be accessed only by owner
+    /// read only
     function getReferralBonus() external view returns (uint256) {
         return referralBonus;
     }
@@ -105,6 +123,12 @@ contract ICO is Ownable, ReentrancyGuard {
     /// returns uint256
     function getCommission() external view returns (uint256) {
         return commission;
+    }
+
+    /// read only
+    /// returns bool
+    function isAllowed(address client) external view returns (bool) {
+       return allowedInvestors[client];
     }
 
     /// can be accessed only by owner
@@ -122,7 +146,7 @@ contract ICO is Ownable, ReentrancyGuard {
         if (icoStartTime == 0) {
             usdPrice = startPriceInUSD;
         } else if (currentIterationOfICO == 0) {
-            oneIterationTokenAmount = 19 * 10 ** 5 * 10 ** 10;
+            oneIterationTokenAmount = 19 * 10 ** 5 * 10 ** 18;
             usdPrice = 10;
             // to have correct order over startPriceInUSD -> Multiplying 0.001 by 10000
             stepPriceInUSD = 1;
@@ -131,7 +155,7 @@ contract ICO is Ownable, ReentrancyGuard {
             usdPrice = usdPrice.add(stepPriceInUSD);
             currentIterationOfICO++;
         } else if (currentIterationOfICO == 100) {
-            oneIterationTokenAmount = 8 * 10 ** 6 * 10 ** 10;
+            oneIterationTokenAmount = 8 * 10 ** 6 * 10 ** 18;
             usdPrice = 110;
             // to have correct order over startPriceInUSD -> Multiplying 0.011 by 10000
             stepPriceInUSD = 10;
@@ -157,10 +181,10 @@ contract ICO is Ownable, ReentrancyGuard {
         ,
         ) = priceFeed.latestRoundData();
         // So here we have to divide final amount
-        uint256 usdAmount = amountETH.mul(uint256(rate)).div(10 ** 8);
+        uint256 usdAmount = amountETH.mul(uint256(rate));
         // Since token price is less then 1 - we have to multiply the smallest value to 10 ** 4
         // So on every calculation of price it should be divided into 10 ** 4
-        uint256 amountTokens = usdAmount.div(usdPrice).div(10 ** 14).mul(10 ** 10);
+        uint256 amountTokens = usdAmount.div(usdPrice).div(10 ** 4);
         if (amountTokens > current_allocatedTokens) {
             uint256 tokenPrice = usdPrice;
             uint256 current_allocated = current_allocatedTokens;
@@ -171,7 +195,7 @@ contract ICO is Ownable, ReentrancyGuard {
                 if (amount > current_allocated) {
                     amountTokens = amountTokens.add(current_allocated);
                     uint256 ethForAllocated = getCost(current_allocated);
-                    uint256 usdForAllocated = ethForAllocated.mul(uint256(rate)).div(10 ** 8);
+                    uint256 usdForAllocated = ethForAllocated.mul(uint256(rate));
                     usdAmount = usdAmount.sub(usdForAllocated);
                     if (currentIterationOfICO < maxRoundICO) {
                         icoRound++;
@@ -195,7 +219,7 @@ contract ICO is Ownable, ReentrancyGuard {
     function getCost(uint amount) public view returns (uint256){
         uint256 usdCost;
         uint256 ethCost;
-        int exchangeRate = getLatestPrice();
+        uint256 exchangeRate = getLatestPrice();
         if (amount <= current_allocatedTokens) {
             usdCost = amount.mul(usdPrice).div(10 ** 4);
             ethCost = getPriceInETH(usdCost, exchangeRate);
@@ -298,7 +322,15 @@ contract ICO is Ownable, ReentrancyGuard {
         require(amount >= minLimit, 'Amount for one purchase is too low');
         require(amount <= maxLimit, 'Limit for one purchase is reached');
         _changeCurrentAllocatedTokens(amount, ethForTokens);
-        _sendTokens(msg.sender, amount);
+        
+        if (currentIterationOfICO > 101 && currentIterationOfICO < 201) {
+            _sendTokens(vestingAddress, amount);
+            Vesting(vestingAddress).startVesting(msg.sender, amount);
+        } else {
+            _sendTokens(msg.sender, amount);
+        }
+        
+        
         _completeICO();
     }
 
@@ -318,52 +350,45 @@ contract ICO is Ownable, ReentrancyGuard {
     /// available only after start of ICO
     /// payable
     /// can be accessed only by owner
-    function buyFor(address buyer) public payable onlyOwner whenIcoStart {
-        uint256 amount = _getAmountForETH(msg.value);
+    function buyFor(uint256 value, address buyer) public payable onlyOwner whenIcoStart {
+        uint256 amount = _getAmountForETH(value);
         require(amount >= minLimit, 'Amount for one purchase is too low');
         require(amount <= maxLimit, 'Limit for one purchase is reached');
         require(buyer != address(0), 'Buyer address should not be empty');
-        _changeCurrentAllocatedTokens(amount, msg.value);
-        IERC20(tokenAddress).transfer(buyer, amount);
+        _changeCurrentAllocatedTokens(amount, value);
+        
+        if (currentIterationOfICO > 101 && currentIterationOfICO < 201) {
+            IERC20(tokenAddress).transfer(vestingAddress, amount);
+            Vesting(vestingAddress).startVesting(buyer, amount);
+        } else {
+            IERC20(tokenAddress).transfer(buyer, amount);
+        }
+        
         emit Bought(buyer, amount, usdPrice);
         _completeICO();
     }
 
-    /// available only after start of ICO
-    /// payable
-    /// can be accessed only by owner
-    function buyForWithReferral(address buyer, address payable referral) external payable
-    onlyOwner whenIcoStart {
-        require(referral != address(0), 'Referral address should not be empty');
-        require(referral != msg.sender, 'Referral address should not be equal buyer address');
-        require(referral != buyer, 'Referral address should not be equal buyer address');
-        uint256 bonusAmount = (msg.value).mul(referralBonus).div(100);
-        buyFor(buyer);
-        (bool success,) = referral.call{value : bonusAmount}("");
-        require(success);
-    }
-
     /// read only
     /// returns int
-    function getLatestPrice() public view returns (int) {
+    function getLatestPrice() public view returns (uint256) {
         (
         ,
         int price,
         ,
         ,
         ) = priceFeed.latestRoundData();
-        return 1 ether / (price / (10 ** 8));
+        return uint256(1 ether / price);
     }
 
     /// returns uint256
-    function getPriceInETH(uint256 amount, int exchangeRate) public pure returns (uint256) {
+    function getPriceInETH(uint256 amount, uint256 exchangeRate) public pure returns (uint256) {
         return amount.mul(uint256(exchangeRate)).div(10 ** 10);
     }
 
     /// read only
     /// returns uint256
     function getTokenPrice(uint256 icoIteration) public view returns (uint256, uint256) {
-        require(icoIteration <= maxRoundICO, 'Incorrect ICO round');
+        require(icoIteration <= maxRoundICO, 'ICO finished');
         uint256 price;
         uint256 stepPrice;
         if (icoIteration == 0) {
@@ -390,12 +415,18 @@ contract ICO is Ownable, ReentrancyGuard {
         require(icoIteration <= maxRoundICO, 'Incorrect ICO round');
         uint256 amount;
         if (icoIteration == 0) {
-            amount = 10 * 10 ** 6 * 10 ** 10;
+            amount = 10 * 10 ** 6 * 10 ** 18;
         } else if (icoIteration > 0 && icoIteration <= 100) {
-            amount = 19 * 10 ** 5 * 10 ** 10;
+            amount = 19 * 10 ** 5 * 10 ** 18;
         } else {
-            amount = 8 * 10 ** 6 * 10 ** 10;
+            amount = 8 * 10 ** 6 * 10 ** 18;
         }
         return amount;
+    }
+    
+    function getChainId() internal view returns (uint256 chainId) {
+        assembly {
+            chainId := chainid()
+        }
     }
 }
